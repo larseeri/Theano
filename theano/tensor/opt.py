@@ -33,7 +33,7 @@ from theano.gof.opt import (Optimizer, pre_constant_merge,
                             pre_greedy_local_optimizer)
 from theano.gof.opt import merge_optimizer
 from theano.gof import toolbox, DestroyHandler
-from basic import get_constant_value, ShapeError
+from basic import get_constant_value, ShapeError, make_vector, MakeVector
 
 
 theano.configparser.AddConfigVar('on_shape_error',
@@ -470,92 +470,6 @@ def local_scalar_tensor_scalar(node):
 #####################################
 # ShapeFeature, Shape optimizations
 #####################################
-
-
-class MakeVector(T.Op):
-    """Concatenate a number of scalars together into a vector
-
-    This is a simple version of stack() that introduces far less cruft
-    into the graph. Should work with 0 inputs. The constant_folding
-    optimization will remove it.
-    """
-    def __init__(self, dtype='int64'):
-        self.dtype = dtype
-
-    def __eq__(self, other):
-        return type(self) == type(other) and self.dtype == other.dtype
-
-    def __hash__(self):
-        return hash(type(self)) ^ hash(self.dtype)
-
-    def make_node(self, *inputs):
-        inputs = map(T.as_tensor_variable, inputs)
-        if not all(a.type == inputs[0].type for a in inputs) or (
-            len(inputs) > 0 and inputs[0].dtype != self.dtype):
-            dtype = theano.scalar.upcast(self.dtype,
-                                         *[i.dtype for i in inputs])
-            #upcast the input to the determined dtype,
-            #but don't downcast anything
-            assert dtype == self.dtype, (
-                    "The upcast of the inputs to MakeVector should match the "
-                    "dtype given in __init__.")
-            if not all(self.dtype == T.cast(i, dtype=dtype).dtype
-                       for a in inputs):
-                raise TypeError("MakeVector.make_node expected inputs"
-                                " upcastable to %s. got %s" % (
-                        self.dtype,
-                        str([i.dtype for i in inputs])
-                        ))
-            inputs = [T.cast(i, dtype=dtype) for i in inputs]
-        assert all(self.dtype == a.dtype for a in inputs)
-        assert all(a.ndim == 0 for a in inputs)
-
-        if inputs:
-            dtype = inputs[0].type.dtype
-        else:
-            dtype = self.dtype
-        #bcastable = (len(inputs) == 1)
-        bcastable = False
-        otype = T.TensorType(
-                broadcastable=(bcastable,),
-                dtype=dtype)
-        return T.Apply(self, inputs, [otype()])
-
-    def __str__(self):
-        return self.__class__.__name__
-
-    def perform(self, node, inputs, out_):
-        out, = out_
-        # not calling theano._asarray as optimization
-        if (out[0] is None) or (out[0].size != len(inputs)):
-            out[0] = theano._asarray(inputs, dtype=node.outputs[0].dtype)
-        else:
-            # assume that out has correct dtype. there is no cheap way to check
-            out[0][...] = inputs
-
-    def infer_shape(self, node, ishapes):
-        return [(len(ishapes),)]
-            
-    def grad(self, inputs, output_gradients):
-        # If the output is of an integer dtype, no gradient shall pass
-        if 'int' in self.dtype:
-            return [None] * len(inputs)
-
-        grads = []
-        for i, inp in enumerate(inputs):
-            if 'int' in inp.dtype:
-                # No gradient wrt integer inputs
-                grads.append(None)
-            else:
-                grads.append(output_gradients[0][i])
-        return grads
-
-    def R_op(self, inputs, eval_points):
-        if None in eval_points:
-            return [None]
-        return self.make_node(*eval_points).outputs
-
-make_vector = MakeVector()
 
 
 class MakeVectorPrinter:
